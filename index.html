@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where You Backpropagate Matters: Token Hypothesis for Memory-Efficient Fine-Tuning</title>
+<meta name="description" content="The Token Hypothesis: an NTK analysis of how fine-tuning signal is distributed across token positions, and a procedure that backpropagates through only a small subset of positions. NeurIPS 2026.">
+<meta property="og:title" content="Where You Backpropagate Matters: Token Hypothesis">
+<meta property="og:description" content="Backpropagate through only a few token positions, keep the full forward pass, and match full fine-tuning with less memory. NeurIPS 2026.">
+<meta property="og:image" content="figures/figure_1.png">
+<meta name="twitter:card" content="summary_large_image">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'$',right:'$',display:false}]});"></script>
+
+<style>
+:root{
+  --paper:#f7f5f0;
+  --paper-2:#efece4;
+  --card:#ffffff;
+  --ink:#16181d;
+  --ink-2:#454a54;
+  --ink-3:#7b808a;
+  --rule:#dedad0;
+  --accent:#d9480f;      /* trainable tokens */
+  --accent-soft:#fde7dc;
+  --cool:#1f4e79;        /* frozen / baseline */
+  --cool-soft:#dde7f1;
+  --good:#2b8a3e;
+  --serif:"Newsreader", Georgia, serif;
+  --sans:"Inter", system-ui, -apple-system, sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, monospace;
+  --w:1080px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:17px;line-height:1.65;-webkit-font-smoothing:antialiased}
+a{color:var(--cool);text-decoration-thickness:1px;text-underline-offset:3px}
+.wrap{max-width:var(--w);margin:0 auto;padding:0 28px}
+.narrow{max-width:760px}
+
+/* ---------- nav ---------- */
+nav.top{position:sticky;top:0;z-index:20;background:rgba(247,245,240,.88);backdrop-filter:blur(10px);border-bottom:1px solid var(--rule)}
+nav.top .wrap{display:flex;align-items:center;justify-content:space-between;height:54px}
+nav.top .brand{font-family:var(--serif);font-size:18px;font-weight:500;color:var(--ink);text-decoration:none}
+nav.top .brand b{color:var(--accent);font-weight:600}
+nav.top ul{list-style:none;display:flex;gap:22px;margin:0;padding:0}
+nav.top ul a{color:var(--ink-2);text-decoration:none;font-size:14px}
+nav.top ul a:hover{color:var(--ink)}
+@media(max-width:820px){nav.top ul{display:none}}
+
+/* ---------- hero ---------- */
+header.hero{padding:72px 0 40px;text-align:center}
+.venue{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);background:var(--accent-soft);padding:6px 14px;border-radius:999px}
+h1{font-family:var(--serif);font-weight:500;font-size:clamp(34px,5.2vw,58px);line-height:1.08;letter-spacing:-.015em;margin:22px auto 0;max-width:920px}
+h1 em{font-style:italic;color:var(--accent)}
+.authors{margin-top:26px;font-size:19px}
+.authors a{color:var(--ink);text-decoration:none;border-bottom:1px solid var(--rule)}
+.authors a:hover{border-color:var(--ink)}
+.authors sup{color:var(--ink-3);font-size:12px}
+.affil{color:var(--ink-3);font-size:15px;margin-top:6px}
+.buttons{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:30px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;border-radius:999px;background:var(--ink);color:#fff;text-decoration:none;font-size:15px;font-weight:500;transition:transform .15s,background .15s}
+.btn:hover{transform:translateY(-1px);background:#2b2f37}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--ink)}
+.btn.ghost:hover{background:var(--ink);color:#fff}
+.btn svg{width:17px;height:17px}
+
+/* ---------- token demo ---------- */
+.demo{margin:46px auto 0;max-width:940px;background:var(--card);border:1px solid var(--rule);border-radius:18px;padding:26px 28px 22px;text-align:left;box-shadow:0 1px 0 rgba(0,0,0,.02),0 18px 40px -24px rgba(22,24,29,.25)}
+.demo-head{display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between}
+.demo-title{font-family:var(--serif);font-size:21px}
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:999px;padding:3px;background:var(--paper)}
+.seg button{border:0;background:transparent;font:500 13px var(--sans);color:var(--ink-2);padding:6px 14px;border-radius:999px;cursor:pointer}
+.seg button.on{background:var(--ink);color:#fff}
+.tokens{display:grid;grid-template-columns:repeat(64,1fr);gap:3px;margin:22px 0 10px}
+.tok{aspect-ratio:1/2.2;border-radius:3px;background:var(--cool-soft);transition:background .25s,transform .25s}
+.tok.on{background:var(--accent);transform:scaleY(1.08)}
+.axis{display:flex;justify-content:space-between;font:12px var(--mono);color:var(--ink-3)}
+.demo-row{display:grid;grid-template-columns:1.4fr 1fr;gap:28px;margin-top:20px;align-items:center}
+@media(max-width:700px){.demo-row{grid-template-columns:1fr}}
+.slider label{display:flex;justify-content:space-between;font-size:14px;color:var(--ink-2)}
+.slider label b{font-family:var(--mono);color:var(--accent);font-weight:500}
+input[type=range]{width:100%;accent-color:var(--accent);margin-top:6px}
+.readout{display:flex;gap:22px}
+.readout div{flex:1}
+.readout .num{font-family:var(--serif);font-size:34px;line-height:1}
+.readout .num.acc{color:var(--accent)}
+.readout .lbl{font-size:12.5px;color:var(--ink-3);margin-top:6px;line-height:1.35}
+.demo-note{font-size:13.5px;color:var(--ink-3);margin-top:16px;border-top:1px dashed var(--rule);padding-top:12px}
+.legend-inline{display:inline-flex;align-items:center;gap:6px;margin-right:14px}
+.sw{width:11px;height:11px;border-radius:2px;display:inline-block}
+
+/* ---------- sections ---------- */
+section{padding:84px 0;border-top:1px solid var(--rule)}
+section.alt{background:var(--paper-2)}
+.kicker{font:600 12.5px var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:10px}
+h2{font-family:var(--serif);font-weight:500;font-size:clamp(28px,3.4vw,40px);line-height:1.15;letter-spacing:-.01em;margin:0 0 20px}
+h3{font-family:var(--serif);font-weight:500;font-size:23px;margin:0 0 8px}
+p{margin:0 0 16px;color:var(--ink-2)}
+p.lead{font-size:19.5px;color:var(--ink);font-family:var(--serif);line-height:1.55}
+
+/* tldr */
+.tldr{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:14px;overflow:hidden;margin-top:36px}
+.tldr div{background:var(--card);padding:22px 20px}
+.tldr .big{font-family:var(--serif);font-size:38px;line-height:1;color:var(--ink)}
+.tldr .big small{font-size:20px;color:var(--ink-3)}
+.tldr .cap{font-size:14px;color:var(--ink-2);margin-top:10px;line-height:1.45}
+@media(max-width:820px){.tldr{grid-template-columns:repeat(2,1fr)}}
+
+/* figures */
+figure{margin:34px 0 0}
+.fig{background:var(--card);border:1px solid var(--rule);border-radius:14px;padding:14px;overflow:hidden}
+.fig img{display:block;width:100%;height:auto;border-radius:6px}
+.ph{display:none;aspect-ratio:16/7;border-radius:8px;background:repeating-linear-gradient(135deg,#f3f1eb 0 12px,#ece9e1 12px 24px);align-items:center;justify-content:center;flex-direction:column;gap:6px;color:var(--ink-3);font:13px var(--mono)}
+.ph b{font:500 15px var(--mono);color:var(--ink-2)}
+.fig.missing img{display:none}
+.fig.missing .ph{display:flex}
+figcaption{font-size:14.5px;color:var(--ink-3);margin-top:12px;line-height:1.55}
+figcaption b{color:var(--ink);font-weight:600}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+@media(max-width:820px){.grid2{grid-template-columns:1fr}}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+@media(max-width:900px){.grid3{grid-template-columns:1fr}}
+
+/* theorem cards */
+.thm{background:var(--card);border:1px solid var(--rule);border-radius:16px;padding:26px 24px;position:relative;display:flex;flex-direction:column}
+.thm .tag{font:600 12px var(--mono);color:var(--accent);letter-spacing:.04em}
+.thm h3{margin-top:8px}
+.thm p{font-size:15.5px}
+.thm .formula{margin-top:auto;padding:14px;border-radius:10px;background:var(--paper);font-size:15px;overflow-x:auto;text-align:center}
+.thm .icon{height:46px;margin:6px 0 14px}
+
+/* corollary callout */
+.callout{margin-top:30px;background:var(--ink);color:#e9e7e1;border-radius:16px;padding:28px 30px;display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:start}
+.callout .tag{font:600 12px var(--mono);color:#ffb38a;white-space:nowrap;margin-top:6px}
+.callout p{color:#c9c6bd;margin:0 0 10px}
+.callout strong{color:#fff}
+.callout ul{margin:6px 0 0;padding-left:20px;color:#c9c6bd}
+.callout li{margin:4px 0}
+@media(max-width:700px){.callout{grid-template-columns:1fr}}
+
+/* method */
+.method>div,.grid2>*,.charts>*,.demo-row>*{min-width:0}
+.method{display:grid;grid-template-columns:1fr 1.05fr;gap:40px;align-items:start}
+@media(max-width:900px){.method{grid-template-columns:1fr}}
+.steps{counter-reset:s;list-style:none;padding:0;margin:20px 0 0}
+.steps li{counter-increment:s;position:relative;padding:0 0 18px 46px;color:var(--ink-2)}
+.steps li::before{content:counter(s);position:absolute;left:0;top:0;width:30px;height:30px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font:600 14px var(--mono);display:flex;align-items:center;justify-content:center}
+.steps li b{color:var(--ink)}
+pre.code{margin:0;background:#15171c;color:#d8d6cf;border-radius:14px;padding:22px 22px;font:13.5px/1.7 var(--mono);overflow-x:auto}
+.code .k{color:#ff9b6a}.code .c{color:#7d828c;font-style:italic}.code .f{color:#8cc4ff}.code .s{color:#b8e0a0}
+.codehead{display:flex;justify-content:space-between;align-items:center;font:12px var(--mono);color:var(--ink-3);margin-bottom:8px}
+
+/* explorer */
+.explorer{background:var(--card);border:1px solid var(--rule);border-radius:18px;padding:24px;margin-top:30px}
+.exp-controls{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:center}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{border:1px solid var(--rule);background:var(--paper);border-radius:999px;padding:7px 14px;font:500 14px var(--sans);color:var(--ink-2);cursor:pointer}
+.chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.charts{display:grid;grid-template-columns:1fr 1fr;gap:26px;margin-top:20px}
+@media(max-width:820px){.charts{grid-template-columns:1fr}}
+.chart-t{font-size:13.5px;font-weight:600;color:var(--ink-2);margin-bottom:4px}
+.chart-t span{font-weight:400;color:var(--ink-3)}
+svg.chart{width:100%;height:auto;overflow:visible}
+svg.chart text{font:11.5px var(--sans);fill:var(--ink-3)}
+svg.chart .grid{stroke:var(--rule);stroke-width:1}
+svg.chart .base{stroke:var(--cool);stroke-width:1.6;stroke-dasharray:5 4}
+svg.chart .line{fill:none;stroke:var(--accent);stroke-width:2.4}
+svg.chart .dot{fill:#fff;stroke:var(--accent);stroke-width:2}
+svg.chart .dot.win{fill:var(--accent)}
+svg.chart .bar{fill:var(--accent);opacity:.85}
+svg.chart .bar.over{fill:#b9b4a8}
+svg.chart text.val{fill:var(--ink-2);font-size:10.5px}
+svg.chart text.blab{fill:var(--cool);font-weight:600}
+.exp-foot{display:flex;flex-wrap:wrap;gap:18px;font-size:13px;color:var(--ink-3);margin-top:14px}
+.insight{margin-top:16px;padding:14px 16px;border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:0 10px 10px 0;font-size:15px;color:var(--ink)}
+
+/* tables */
+.tablewrap{overflow-x:auto;margin-top:26px;background:var(--card);border:1px solid var(--rule);border-radius:14px}
+table{border-collapse:collapse;width:100%;font-size:13px;font-variant-numeric:tabular-nums}
+th,td{padding:8px 6px;text-align:center;white-space:nowrap}
+thead th{font-weight:600;color:var(--ink-2);border-bottom:1px solid var(--rule);background:#fbfaf7}
+thead tr:first-child th{font-family:var(--serif);font-size:15.5px;font-weight:500;color:var(--ink)}
+tbody tr+tr td{border-top:1px solid #f0ede6}
+td.m{font-family:var(--mono);color:var(--ink-2);text-align:left;padding-left:16px}
+td.th{background:#fff8f4}
+td.best{font-weight:700;color:var(--accent)}
+th.th{color:var(--accent)}
+.vsep{border-left:1px solid var(--rule)}
+.tnote{font-size:13.5px;color:var(--ink-3);margin-top:12px}
+.up{color:var(--good);font-size:12px;font-weight:600}
+.dn{color:#c92a2a;font-size:12px;font-weight:600}
+
+/* ablations */
+.abl{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-top:30px}
+@media(max-width:900px){.abl{grid-template-columns:repeat(2,1fr)}}
+.abl div{background:var(--card);border:1px solid var(--rule);border-radius:14px;padding:18px}
+.abl .big{font-family:var(--serif);font-size:30px;line-height:1;color:var(--accent)}
+.abl h4{margin:10px 0 4px;font-size:14.5px}
+.abl p{font-size:13.5px;margin:0;line-height:1.5}
+
+/* bibtex */
+.bib{position:relative}
+.bib pre{margin:0;background:var(--card);border:1px solid var(--rule);border-radius:14px;padding:22px;font:13.5px/1.7 var(--mono);color:var(--ink-2);overflow-x:auto}
+.copy{position:absolute;top:12px;right:12px;border:1px solid var(--rule);background:var(--paper);border-radius:8px;padding:6px 12px;font:500 13px var(--sans);cursor:pointer;color:var(--ink-2)}
+.copy:hover{background:var(--ink);color:#fff;border-color:var(--ink)}
+
+footer{padding:40px 0 56px;border-top:1px solid var(--rule);font-size:13.5px;color:var(--ink-3);text-align:center}
+
+.reveal{opacity:0;transform:translateY(14px);transition:opacity .7s ease,transform .7s ease}
+.reveal.in{opacity:1;transform:none}
+@media (prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;transition:none}.tok{transition:none}}
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="wrap">
+    <a class="brand" href="#">Token <b>Hypothesis</b></a>
+    <ul>
+      <li><a href="#abstract">Abstract</a></li>
+      <li><a href="#theory">Theory</a></li>
+      <li><a href="#method">Method</a></li>
+      <li><a href="#results">Results</a></li>
+      <li><a href="#validation">Validation</a></li>
+      <li><a href="#bibtex">BibTeX</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- ================= HERO ================= -->
+<header class="hero">
+  <div class="wrap">
+    <span class="venue">NeurIPS 2026</span>
+    <h1>Where You Backpropagate Matters:<br><em>Token Hypothesis</em> for Memory-Efficient Fine-Tuning</h1>
+
+    <div class="authors">
+      <a href="#">Md Kowsher</a><sup>1,2</sup>&nbsp;&nbsp;&nbsp;
+      <a href="#">Chen Chen</a><sup>2</sup>
+    </div>
+    <div class="affil"><sup>1</sup>Meta &nbsp;·&nbsp; <sup>2</sup>University of Central Florida</div>
+
+    <div class="buttons">
+      <a class="btn" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>Paper</a>
+      <a class="btn" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 9l3 3-3 3M13 15h3"/></svg>arXiv</a>
+      <a class="btn" href="#"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.9 1.3 1.9 1.3 1.1 1.8 2.9 1.3 3.6 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.7 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .5z"/></svg>Code</a>
+      <a class="btn ghost" href="#bibtex"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/></svg>BibTeX</a>
+    </div>
+
+    <!-- interactive token strip -->
+    <div class="demo" id="demo">
+      <div class="demo-head">
+        <div class="demo-title">Which positions receive gradients?</div>
+        <div class="seg" role="tablist">
+          <button class="on" data-mode="causal">Causal · last-M</button>
+          <button data-mode="bidir">Bidirectional · any M</button>
+        </div>
+      </div>
+      <div class="tokens" id="tokens" aria-hidden="true"></div>
+      <div class="axis"><span>t = 1</span><span id="axisMid">sequence position →</span><span>t = T</span></div>
+
+      <div class="demo-row">
+        <div class="slider">
+          <label for="mslider">Trainable positions <b id="mval">M = 8 of 64</b></label>
+          <input type="range" id="mslider" min="1" max="64" value="8">
+        </div>
+        <div class="readout">
+          <div><div class="num acc" id="frac">12.5%</div><div class="lbl">of positions on the<br>backward graph</div></div>
+          <div><div class="num" id="saved">87.5%</div><div class="lbl">per-token activations<br>never stored (1 − M/T)</div></div>
+        </div>
+      </div>
+      <div class="demo-note">
+        <span class="legend-inline"><span class="sw" style="background:var(--accent)"></span>backprop (trainable)</span>
+        <span class="legend-inline"><span class="sw" style="background:var(--cool-soft)"></span>forward only, under <code>torch.no_grad()</code></span>
+        <span id="modeNote">Causal models: later positions carry the richest signal (Theorem 3), so train the last M.</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ================= TL;DR ================= -->
+<section id="tldr">
+  <div class="wrap">
+    <div class="narrow">
+      <div class="kicker">TL;DR</div>
+      <p class="lead">Fine-tuning a transformer stores activations at every token position, and that cost grows linearly with sequence length. We show, through a Neural Tangent Kernel lens, that each position is a <em>low-dimensional bottleneck</em>, so you only need to backpropagate through a small, architecture-dependent subset of positions. The full forward pass stays intact, and inference is unchanged.</p>
+    </div>
+    <div class="tldr reveal">
+      <div><div class="big">1.5–5.2</div><div class="cap">Effective rank of a single position's Gram matrix, across every tested model, position and dataset size.</div></div>
+      <div><div class="big">6 <small>× 5</small></div><div class="cap">Task families × backbones where a small M matches or beats full-sequence fine-tuning in nearly all settings.</div></div>
+      <div><div class="big">−81.8<small> GB</small></div><div class="cap">Total GPU memory saved on LLaMA-3-8B long-context tuning at T = 8192 with M = 500.</div></div>
+      <div><div class="big">3.6<small>×</small></div><div class="cap">Larger attainable batch size under a fixed memory budget (batch size 64).</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= OVERVIEW FIGURE ================= -->
+<section class="alt" id="overview">
+  <div class="wrap">
+    <div class="kicker">Overview</div>
+    <h2>The Token Hypothesis at a glance</h2>
+    <figure class="reveal">
+      <div class="fig"><img src="figures/figure_1.png" alt="Overview of the Token Hypothesis and training procedure"><div class="ph"><b>figures/figure_1.png</b>Overview figure</div></div>
+      <figcaption><b>Figure 1.</b> (a) Three theorems and a corollary characterize how fine-tuning signal is distributed across positions: capacity per position is bounded, equal across positions in bidirectional models, and monotonically increasing in causal models. (b) We select M trainable positions and reorder the sequence so that only that group receives gradients. (c) Attention masks for four selection strategies: Random, Last-M, First-M and Any subset.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ================= ABSTRACT ================= -->
+<section id="abstract">
+  <div class="wrap narrow">
+    <div class="kicker">Abstract</div>
+    <h2>Activations, not parameters, dominate the bill</h2>
+    <p>Fine-tuning large transformers routes gradients through every token position, paying the cost in activation memory that scales linearly with sequence length and dominates the GPU budget. Existing efficient methods reduce the parameter side (low-rank adapters, prefix tuning, weight-decomposed updates) but leave the activation footprint untouched.</p>
+    <p>We present the <b>Token Hypothesis</b>, a memory-efficient fine-tuning procedure motivated by a Neural Tangent Kernel analysis of how fine-tuning signal is distributed across token positions. We prove that every position is a low-dimensional capacity bottleneck whose width does not grow with the model, that positions with aligned hidden-state geometry are interchangeable in bidirectional models, and that causal positions form a monotone capacity chain in which later positions strictly dominate earlier ones.</p>
+    <p>The analysis provides an assumption-qualified criterion for estimating how many positions are needed and which ones, using quantities computable from forward passes alone. We translate this into a procedure that backpropagates through only a small subset of positions while running the full forward pass over the rest. Empirically, it matches or exceeds full-sequence fine-tuning in nearly all settings across six task families and five backbones, reduces activation memory substantially, and composes cleanly with LoRA and DoRA.</p>
+  </div>
+</section>
+
+<!-- ================= THEORY ================= -->
+<section class="alt" id="theory">
+  <div class="wrap">
+    <div class="kicker">Theory</div>
+    <h2>Three theorems about a single token position</h2>
+    <p style="max-width:760px">Let $\phi_t(x) := \nabla_\theta o_t(x;\theta_0)$ be the position-$t$ feature map and $K_t[n,m] := \langle \phi_t(x^{(n)}), \phi_t(x^{(m)})\rangle$ its Gram matrix. Under the NTK regime, training through position $t$ is kernel regression with $K_t$, so everything follows from how $K_t$ behaves across positions and architectures.</p>
+
+    <div class="grid3" style="margin-top:30px">
+      <div class="thm reveal">
+        <div class="tag">THEOREM 1</div>
+        <h3>Limited capacity per position</h3>
+        <svg class="icon" viewBox="0 0 120 46"><rect x="2" y="8" width="40" height="30" rx="4" fill="var(--cool-soft)"/><path d="M42 14 L62 21 L62 25 L42 32Z" fill="var(--accent)" opacity=".8"/><rect x="62" y="19" width="56" height="8" rx="3" fill="var(--accent-soft)" stroke="var(--accent)"/></svg>
+        <p>Training through one position confines every update to a subspace whose dimension is at most $\mathrm{rank}(K_t) \le \min(N,P)$, independent of model size. Measured effective rank is tiny: $d_{\mathrm{eff}}(K_t)\in[1.5,\,5.2]$.</p>
+        <div class="formula">$\hat f_t(X) \in o_t(X;\theta_0) + \mathrm{Im}(K_t)$</div>
+      </div>
+      <div class="thm reveal">
+        <div class="tag">THEOREM 2</div>
+        <h3>Equal capacity, bidirectional</h3>
+        <svg class="icon" viewBox="0 0 120 46"><g fill="var(--accent)"><rect x="4" y="12" width="12" height="22" rx="3"/><rect x="24" y="12" width="12" height="22" rx="3" opacity=".55"/><rect x="44" y="12" width="12" height="22" rx="3"/><rect x="64" y="12" width="12" height="22" rx="3" opacity=".55"/><rect x="84" y="12" width="12" height="22" rx="3"/><rect x="104" y="12" width="12" height="22" rx="3" opacity=".55"/></g></svg>
+        <p>When every position sees the full sequence, positions with aligned hidden-state geometry yield nearly identical fine-tuned predictors. The gap is bounded by quantities you can compute from forward passes alone, so choosing positions reduces to sampling.</p>
+        <div class="formula">$\|f_i - f_j\| \le \delta_{\text{init}} + \tfrac{\delta_k R}{\lambda_0^+} + \tfrac{\|k_j\|\,\delta_K R}{(\lambda_0^+)^2} + \tfrac{\|k_j\|\,\delta_r}{\lambda_0^+}$</div>
+      </div>
+      <div class="thm reveal">
+        <div class="tag">THEOREM 3</div>
+        <h3>Monotone capacity, causal</h3>
+        <svg class="icon" viewBox="0 0 120 46"><g fill="var(--accent)"><rect x="4" y="34" width="12" height="8" rx="2" opacity=".25"/><rect x="24" y="28" width="12" height="14" rx="2" opacity=".4"/><rect x="44" y="22" width="12" height="20" rx="2" opacity=".55"/><rect x="64" y="16" width="12" height="26" rx="2" opacity=".7"/><rect x="84" y="10" width="12" height="32" rx="2" opacity=".85"/><rect x="104" y="4" width="12" height="38" rx="2"/></g></svg>
+        <p>Under a contraction condition linking adjacent hidden states, Gram matrices form a monotone chain up to a vanishing slack: later positions carry at least as rich a gradient signal as earlier ones. The natural subset is the <b>last M</b>.</p>
+        <div class="formula">$K_{t+1} \succeq K_t - \delta_t I_N$</div>
+      </div>
+    </div>
+
+    <div class="callout reveal">
+      <div class="tag">COROLLARY 1 · how many?</div>
+      <div>
+        <p>Define $M^\ast := \min\{M : \mathrm{Im}(K^{(M)}) = \mathrm{Im}(K^{(T)})\}$, the fewest positions whose combined Gram matrix spans the same prediction space as the full sequence. <strong>Its value is set by the architecture.</strong></p>
+        <ul>
+          <li><strong>Bidirectional:</strong> $M^\ast \le \lceil \epsilon_K T / \lambda^+ + 1 \rceil$, and $M^\ast = 1$ when position kernels coincide.</li>
+          <li><strong>Causal, last-to-first:</strong> $M^\ast = 1$. The single last position spans the whole prediction space.</li>
+          <li><strong>Causal, first-to-last:</strong> $M^\ast = T$. Every position adds a strictly new direction.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <figure class="reveal">
+        <div class="fig"><img src="figures/figure_2.png" alt="Image-space saturation on RoBERTa-base"><div class="ph"><b>figures/figure_2.png</b>Saturation · RoBERTa-base</div></div>
+        <figcaption><b>Figure 2.</b> Image-space saturation on RoBERTa-base (bidirectional). All three saturation metrics cross the 0.90 threshold at $M^\ast \le 4$, stable across $(N,T)$.</figcaption>
+      </figure>
+      <figure class="reveal">
+        <div class="fig"><img src="figures/figure_3.png" alt="Image-space saturation on SmolLM2-135M"><div class="ph"><b>figures/figure_3.png</b>Saturation · SmolLM2-135M</div></div>
+        <figcaption><b>Figure 3.</b> Image-space saturation on SmolLM2-135M (causal). Reverse ordering (R2L) reaches $\mathrm{Im}(K^{(T)})$ at $M=1$; forward ordering (L2R) needs $M=T$.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ================= METHOD ================= -->
+<section id="method">
+  <div class="wrap">
+    <div class="kicker">Method</div>
+    <h2>Full forward pass, partial backward pass</h2>
+    <div class="method">
+      <div>
+        <p>Theory becomes a few lines of code. Every per-token module (linear projections, embeddings, LayerNorm and RMSNorm) is wrapped so that its input is split along the sequence axis.</p>
+        <ol class="steps">
+          <li><b>Pick S, |S| = M.</b> A random subset resampled each epoch for bidirectional models; the last M positions for causal models.</li>
+          <li><b>Freeze the rest.</b> Positions outside S run under <code>torch.no_grad()</code>, so their activations never enter the computation graph.</li>
+          <li><b>Train the rest.</b> Positions in S get the base op plus a method-specific delta: identity for full FT, $BA$ for LoRA, the normalized update for DoRA.</li>
+          <li><b>Deploy as usual.</b> Drop the wrapper and merge any adapters into $W$. No inference overhead.</li>
+        </ol>
+        <p style="font-size:15px">Attention scores still run on the full rejoined sequence, which keeps compatibility with SDPA and FlashAttention. The method also stacks with gradient checkpointing.</p>
+      </div>
+      <div>
+        <div class="codehead"><span>Algorithm 1 · wrapper for one per-token module</span><span>PyTorch</span></div>
+<pre class="code"><span class="k">class</span> <span class="f">TokenHypothesisWrap</span>(nn.Module):
+    <span class="k">def</span> <span class="f">__init__</span>(self, base, delta, M):
+        super().__init__()
+        self.base, self.delta, self.M = base, delta, M
+
+    <span class="k">def</span> <span class="f">forward</span>(self, X):            <span class="c"># X: [B, T, d]</span>
+        Tf = X.size(<span class="s">1</span>) - self.M        <span class="c"># frozen length</span>
+        Xf, Xp = X[:, :Tf], X[:, Tf:]
+
+        <span class="k">with</span> torch.no_grad():         <span class="c"># no activations kept</span>
+            Yf = self.base(Xf)
+
+        Yp = self.base(Xp) + self.delta(Xp)  <span class="c"># full grad</span>
+        <span class="k">return</span> torch.cat([Yf, Yp], dim=<span class="s">1</span>)
+
+<span class="c"># delta = 0           → full fine-tuning</span>
+<span class="c"># delta = B @ A       → LoRA</span>
+<span class="c"># delta = DoRA update → DoRA</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= RESULTS ================= -->
+<section class="alt" id="results">
+  <div class="wrap">
+    <div class="kicker">Results</div>
+    <h2>A few hundred positions match the full sequence</h2>
+    <p style="max-width:780px">Every run in a (modality, regime) pair shares the same learning rate, batch size, schedule and GPUs; the only variable is $M$. Pick a setting below to see accuracy and total GPU memory as $M$ grows, with the full-sequence baseline dashed. Numbers are from Table 1 (LLaMA-3-8B for text, Qwen3-VL-8B for VQA and video).</p>
+
+    <div class="explorer reveal">
+      <div class="exp-controls">
+        <div class="chips" id="taskChips"></div>
+        <div class="seg" id="regimeSeg"></div>
+      </div>
+      <div class="charts">
+        <div>
+          <div class="chart-t">Mean accuracy <span>vs. trainable positions M</span></div>
+          <svg class="chart" id="accChart" viewBox="0 0 460 260"></svg>
+        </div>
+        <div>
+          <div class="chart-t">Total GPU memory, GB <span>vs. trainable positions M</span></div>
+          <svg class="chart" id="memChart" viewBox="0 0 460 260"></svg>
+        </div>
+      </div>
+      <div class="exp-foot">
+        <span class="legend-inline"><span class="sw" style="background:var(--accent)"></span>Token Hypothesis (M positions)</span>
+        <span class="legend-inline"><span class="sw" style="background:var(--cool)"></span>All positions (baseline)</span>
+        <span class="legend-inline"><span class="sw" style="background:var(--accent);border-radius:50%"></span>filled dot = matches or beats baseline</span>
+      </div>
+      <div class="insight" id="insight"></div>
+    </div>
+
+    <h3 style="margin-top:64px">Against other token-selection methods</h3>
+    <p style="max-width:780px">At matched token budgets and identical memory, the Token Hypothesis (TH) leads TokenTune (TT) and TokenSeek (TS) in most cells. It does this without TokenSeek's pre-scoring pass over the training set or its per-model grid search: it just applies the last-M rule.</p>
+    <div class="tablewrap reveal">
+      <table id="cmpTable"></table>
+    </div>
+    <p class="tnote">Commonsense reasoning on LLaMA-3-8B. GPU = peak allocated memory (GB), shared across the three methods at each budget. Bold = best in each benchmark group.</p>
+
+    <div class="grid2" style="margin-top:56px;align-items:start">
+      <div>
+        <h3>Long context: the savings get large</h3>
+        <p>LLaMA-3-8B on LongAlpaca-12k at $T=8192$ on 8×A100-80GB. Long-form generation needs a larger budget, since the required $M$ scales with the length of the supervised span.</p>
+        <div class="tablewrap" style="margin-top:14px">
+          <table>
+            <thead><tr><th style="text-align:left;padding-left:16px">Tokens</th><th>M/T</th><th>GPU (GB)</th><th>Time (min)</th><th>PPL ↓</th></tr></thead>
+            <tbody>
+              <tr><td class="m">All</td><td>1.00</td><td>292.8</td><td>301.5</td><td>8.14</td></tr>
+              <tr><td class="m">500</td><td>0.06</td><td>211.0 <span class="up">−81.8</span></td><td>230.2 <span class="up">−71.3</span></td><td>9.12 <span class="dn">+0.98</span></td></tr>
+              <tr><td class="m">1000</td><td>0.12</td><td>215.4 <span class="up">−77.4</span></td><td>239.5 <span class="up">−62.0</span></td><td>9.04 <span class="dn">+0.90</span></td></tr>
+              <tr><td class="m">2000</td><td>0.24</td><td>224.4 <span class="up">−68.4</span></td><td>248.4 <span class="up">−53.1</span></td><td>8.61 <span class="dn">+0.47</span></td></tr>
+              <tr><td class="m">5000</td><td>0.61</td><td>276.4 <span class="up">−16.4</span></td><td>286.7 <span class="up">−14.8</span></td><td class="best">8.11 <span class="up">−0.03</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="tnote">Savings are additive with gradient checkpointing: on top of GC, M = 2500 cuts memory from 193.1 to 182.9 GB while perplexity improves slightly (8.103 vs 8.143).</p>
+      </div>
+      <div>
+        <h3>Bidirectional backbones too</h3>
+        <p>On RoBERTa-base (GLUE) and ViT-L/16 (image classification), accuracy saturates at <b>M = 50–100</b>, consistent with Theorem 2: in bidirectional models, small subsets of aligned positions suffice.</p>
+        <figure style="margin-top:14px">
+          <div class="fig"><img src="figures/figure_28.png" alt="Ablation studies for token-masked fine-tuning"><div class="ph"><b>figures/figure_28.png</b>Ablations</div></div>
+          <figcaption><b>Figure 28.</b> Ablation studies for token-masked fine-tuning: batch-size scaling, sequence-length scaling, convergence across M and NTK laziness.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= VALIDATION ================= -->
+<section id="validation">
+  <div class="wrap">
+    <div class="kicker">Empirical validation</div>
+    <h2>The theorems hold on real models</h2>
+
+    <figure class="reveal">
+      <div class="fig"><img src="figures/figure_4.png" alt="Validation of Theorem 1"><div class="ph"><b>figures/figure_4.png</b>Theorem 1 · RoBERTa-base</div></div>
+      <figcaption><b>Figure 4 · Theorem 1.</b> On RoBERTa-base ($N=500$), eigenvalues of $K_t$ drop by more than ten orders of magnitude near the tail, and $d_{\mathrm{eff}}(K_t)\in[1.5,3.9]$ across all eight positions tested.</figcaption>
+    </figure>
+    <figure class="reveal">
+      <div class="fig"><img src="figures/figure_5.png" alt="Validation of Theorem 2"><div class="ph"><b>figures/figure_5.png</b>Theorem 2 · RoBERTa-base</div></div>
+      <figcaption><b>Figure 5 · Theorem 2.</b> Across 12 fixed prompt positions, eigenvalue and cumulative-variance curves are nearly indistinguishable, with $d_{\mathrm{eff}}\in[1.02,1.12]$ (CV = 0.02). All ten position pairs pass a permutation test at $p<0.001$.</figcaption>
+    </figure>
+    <figure class="reveal">
+      <div class="fig"><img src="figures/figure_6.png" alt="Validation of Theorem 3"><div class="ph"><b>figures/figure_6.png</b>Theorem 3 · LLaMA-3-8B</div></div>
+      <figcaption><b>Figure 6 · Theorem 3.</b> On LLaMA-3-8B, $\mathrm{tr}(K_t)$ grows with position and $\lambda_{\min}(K_{t+1}-K_t+\delta_t I)\ge 0$ at every transition. Linear-probe accuracy rises from near chance at position 1 to about 0.8 at position 45.</figcaption>
+    </figure>
+
+    <h3 style="margin-top:64px">Ablations</h3>
+    <div class="abl reveal">
+      <div><div class="big">3.6×</div><h4>Batch size</h4><p>Activation memory grows linearly in batch size with slope ∝ M, so a smaller M buys a bigger batch.</p></div>
+      <div><div class="big">97.6%</div><h4>Sequence length</h4><p>Fixing M = 50 decouples activation memory from T, up to 97.6% saved at T = 2048 on video.</p></div>
+      <div><div class="big">50–100</div><h4>Convergence</h4><p>M = 50–100 matches full-sequence accuracy on LLaVA-OneVision-7B over 1000 eval steps.</p></div>
+      <div><div class="big">&lt;0.011</div><h4>NTK laziness</h4><p>Mean weight drift stays below 0.011 across every parameter group and every M.</p></div>
+      <div><div class="big">~4×</div><h4>Less forgetting</h4><p>M = 100 on ARC-C cuts forgetting on four untrained benchmarks by about 4× vs. full FT.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= BIBTEX ================= -->
+<section class="alt" id="bibtex">
+  <div class="wrap narrow">
+    <div class="kicker">Citation</div>
+    <h2>BibTeX</h2>
+    <div class="bib">
+      <button class="copy" id="copyBtn">Copy</button>
+<pre id="bibText">@inproceedings{kowsher2026token,
+  title     = {Where You Backpropagate Matters: Token Hypothesis
+               for Memory-Efficient Fine-Tuning},
+  author    = {Kowsher, Md and Chen, Chen},
+  booktitle = {Advances in Neural Information Processing Systems},
+  year      = {2026}
+}</pre>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    Md Kowsher &amp; Chen Chen · NeurIPS 2026<br>
+    This page is open source. Feel free to borrow its structure for your own project page.
+  </div>
+</footer>
+
+<script>
+/* ---------- figure placeholders ---------- */
+document.querySelectorAll('.fig img').forEach(img=>{
+  const mark=()=>img.parentElement.classList.add('missing');
+  if(img.complete && img.naturalWidth===0) mark();
+  img.addEventListener('error',mark);
+});
+
+/* ---------- token demo ---------- */
+(function(){
+  const T=64, wrap=document.getElementById('tokens');
+  for(let i=0;i<T;i++){const d=document.createElement('div');d.className='tok';wrap.appendChild(d);}
+  const toks=[...wrap.children], sl=document.getElementById('mslider');
+  let mode='causal', perm=[...Array(T).keys()];
+  const shuffle=()=>{for(let i=T-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[perm[i],perm[j]]=[perm[j],perm[i]];}};
+  shuffle();
+  const notes={causal:'Causal models: later positions carry the richest signal (Theorem 3), so train the last M.',
+               bidir:'Bidirectional models: aligned positions are interchangeable (Theorem 2), so sample any M, resampled each epoch.'};
+  function draw(){
+    const M=+sl.value;
+    const on=new Set(mode==='causal'?[...Array(M).keys()].map(i=>T-1-i):perm.slice(0,M));
+    toks.forEach((t,i)=>t.classList.toggle('on',on.has(i)));
+    document.getElementById('mval').textContent=`M = ${M} of ${T}`;
+    document.getElementById('frac').textContent=(100*M/T).toFixed(1).replace(/\.0$/,'')+'%';
+    document.getElementById('saved').textContent=(100*(1-M/T)).toFixed(1).replace(/\.0$/,'')+'%';
+    document.getElementById('modeNote').textContent=notes[mode];
+  }
+  sl.addEventListener('input',draw);
+  document.querySelectorAll('#demo .seg button').forEach(b=>b.addEventListener('click',()=>{
+    document.querySelectorAll('#demo .seg button').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on'); mode=b.dataset.mode; if(mode==='bidir') shuffle(); draw();
+  }));
+  draw();
+})();
+
+/* ---------- results explorer (Table 1) ---------- */
+const Ms=[10,25,50,100,300,500,700,1000];
+const DATA={
+  'Commonsense':{FT:{all:[.831,95.28],acc:[.744,.801,.831,.834,.838,.830,.831,.832],gpu:[83.69,83.91,84.63,85.85,88.87,91.54,94.21,96.62]},
+                 DoRA:{all:[.744,50.20],acc:[.687,.697,.736,.744,.747,.744,.745,.746],gpu:[49.24,49.30,49.43,49.62,50.38,51.20,51.95,52.72]}},
+  'Math':{FT:{all:[.829,95.38],acc:[.399,.576,.695,.790,.834,.833,.828,.834],gpu:[83.93,84.15,84.61,85.34,88.35,91.49,94.47,97.50]},
+          DoRA:{all:[.774,55.59],acc:[.494,.602,.687,.773,.790,.782,.786,.782],gpu:[49.70,49.79,49.94,50.26,51.41,52.60,53.72,54.87]}},
+  'Visual QA':{FT:{all:[.728,168.07],acc:[.711,.711,.720,.736,.739,.735,.731,.724],gpu:[135.29,135.58,136.06,136.82,140.13,143.45,146.72,151.70]},
+               LoRA:{all:[.669,88.12],acc:[.663,.652,.665,.659,.676,.675,.668,.663],gpu:[76.22,76.31,76.46,76.74,77.86,78.98,80.07,81.77]}},
+  'Video QA':{FT:{all:[.604,113.09],acc:[.574,.562,.574,.574,.588,.609,.593,.597],gpu:[101.03,101.44,102.08,104.02,108.62,109.12,109.35,109.70]},
+              LoRA:{all:[.579,56.87],acc:[.531,.536,.528,.497,.540,.535,.550,.563],gpu:[49.78,49.93,50.17,50.60,52.37,53.30,53.52,53.84]}}
+};
+let task='Commonsense', regime='FT';
+const NS='http://www.w3.org/2000/svg';
+const el=(n,a={},txt)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(txt!=null)e.textContent=txt;return e;};
+
+function niceRange(vals,pad){let lo=Math.min(...vals),hi=Math.max(...vals);const p=(hi-lo)*pad||.01;return [lo-p,hi+p];}
+function ticks(lo,hi,n){const step=(hi-lo)/(n-1);return [...Array(n)].map((_,i)=>lo+i*step);}
+
+function lineChart(svg,d){
+  svg.innerHTML='';
+  const W=460,H=260,L=44,R=14,Tp=14,B=34,iw=W-L-R,ih=H-Tp-B;
+  const [lo,hi]=niceRange([...d.acc,d.all[0]],.12);
+  const x=i=>L+iw*i/(Ms.length-1), y=v=>Tp+ih*(1-(v-lo)/(hi-lo));
+  ticks(lo,hi,5).forEach(t=>{svg.append(el('line',{x1:L,x2:W-R,y1:y(t),y2:y(t),class:'grid'}));svg.append(el('text',{x:L-8,y:y(t)+4,'text-anchor':'end'},t.toFixed(2)));});
+  Ms.forEach((m,i)=>svg.append(el('text',{x:x(i),y:H-12,'text-anchor':'middle'},m)));
+  svg.append(el('line',{x1:L,x2:W-R,y1:y(d.all[0]),y2:y(d.all[0]),class:'base'}));
+  svg.append(el('text',{x:W-R,y:y(d.all[0])-7,'text-anchor':'end',class:'blab'},`All: ${d.all[0].toFixed(3)}`));
+  svg.append(el('path',{d:d.acc.map((v,i)=>(i?'L':'M')+x(i)+' '+y(v)).join(' '),class:'line'}));
+  d.acc.forEach((v,i)=>{const c=el('circle',{cx:x(i),cy:y(v),r:4.5,class:'dot'+(v>=d.all[0]?' win':'')});c.append(el('title',{},`M=${Ms[i]}: ${v.toFixed(3)}`));svg.append(c);});
+}
+function barChart(svg,d){
+  svg.innerHTML='';
+  const W=460,H=260,L=44,R=14,Tp=14,B=34,iw=W-L-R,ih=H-Tp-B;
+  const vals=[...d.gpu,d.all[1]];const lo=Math.floor(Math.min(...vals)*0.9/5)*5, hi=Math.max(...vals)*1.04;
+  const bw=iw/Ms.length, y=v=>Tp+ih*(1-(v-lo)/(hi-lo));
+  ticks(lo,hi,5).forEach(t=>{svg.append(el('line',{x1:L,x2:W-R,y1:y(t),y2:y(t),class:'grid'}));svg.append(el('text',{x:L-8,y:y(t)+4,'text-anchor':'end'},Math.round(t)));});
+  d.gpu.forEach((v,i)=>{const cx=L+bw*i+bw/2;
+    const r=el('rect',{x:cx-bw*0.32,y:y(v),width:bw*0.64,height:Tp+ih-y(v),rx:3,class:'bar'+(v>d.all[1]?' over':'')});r.append(el('title',{},`M=${Ms[i]}: ${v} GB`));svg.append(r);
+    svg.append(el('text',{x:cx,y:H-12,'text-anchor':'middle'},Ms[i]));});
+  svg.append(el('line',{x1:L,x2:W-R,y1:y(d.all[1]),y2:y(d.all[1]),class:'base'}));
+  svg.append(el('text',{x:L+6,y:y(d.all[1])-7,class:'blab'},`All: ${d.all[1]} GB`));
+}
+function render(){
+  const d=DATA[task][regime];
+  lineChart(document.getElementById('accChart'),d);
+  barChart(document.getElementById('memChart'),d);
+  const first=d.acc.findIndex(v=>v>=d.all[0]);
+  const ins=document.getElementById('insight');
+  if(first<0){
+    const b=Math.max(...d.acc), bi=d.acc.indexOf(b);
+    ins.innerHTML=`<b>${task} · ${regime}</b>: the one setting that stays below baseline. Best is ${b.toFixed(3)} at M = ${Ms[bi]} vs. ${d.all[0].toFixed(3)} for all positions; the paper traces the gap mainly to VideoMathQA.`;
+  }else{
+    const save=(d.all[1]-d.gpu[first]).toFixed(1);
+    ins.innerHTML=`<b>${task} · ${regime}</b>: matches the full-sequence baseline from <b>M = ${Ms[first]}</b> (${d.acc[first].toFixed(3)} vs. ${d.all[0].toFixed(3)}), using <b>${save} GB</b> less total GPU memory at that point.`;
+  }
+}
+function buildControls(){
+  const tc=document.getElementById('taskChips');tc.innerHTML='';
+  Object.keys(DATA).forEach(k=>{const b=document.createElement('button');b.className='chip'+(k===task?' on':'');b.textContent=k;
+    b.onclick=()=>{task=k;if(!DATA[task][regime])regime='FT';buildControls();render();};tc.append(b);});
+  const rs=document.getElementById('regimeSeg');rs.innerHTML='';
+  Object.keys(DATA[task]).forEach(r=>{const b=document.createElement('button');b.textContent=r==='FT'?'Full FT':r;b.className=r===regime?'on':'';
+    b.onclick=()=>{regime=r;buildControls();render();};rs.append(b);});
+}
+buildControls();render();
+
+/* ---------- comparison table (Table 2) ---------- */
+(function(){
+  const benches=['ARC-Chal.','ARC-Easy','BoolQ','HellaSwag','OpenBookQA','WinoGrande'];
+  const rows=[
+    [10,[.258,.519,.504],[.256,.764,.768],[.622,.651,.678],[.438,.683,.776],[.364,.630,.616],[.496,.705,.728],29.99],
+    [25,[.470,.607,.528],[.693,.816,.812],[.622,.614,.719],[.491,.247,.892],[.468,.730,.664],[.496,.760,.775],29.99],
+    [50,[.486,.643,.635],[.653,.808,.841],[.622,.714,.717],[.593,.255,.903],[.448,.714,.772],[.496,.810,.829],29.99],
+    [100,[.420,.672,.665],[.734,.855,.859],[.622,.722,.721],[.762,.455,.924],[.316,.784,.782],[.656,.830,.834],30.00],
+    [300,[.570,.661,.666],[.787,.858,.856],[.651,.713,.717],[.864,.931,.932],[.676,.786,.788],[.681,.837,.838],35.82],
+    [500,[.622,.658,.664],[.807,.854,.857],[.684,.709,.719],[.887,.933,.932],[.722,.782,.782],[.800,.838,.838],42.79],
+    [700,[.659,.666,.664],[.824,.859,.857],[.695,.714,.719],[.907,.932,.935],[.730,.786,.780],[.781,.840,.841],49.73],
+    [900,[.658,.666,.658],[.849,.853,.858],[.714,.717,.716],[.930,.934,.933],[.766,.782,.782],[.841,.846,.848],56.68]];
+  let h='<thead><tr><th rowspan="2" style="text-align:left;padding-left:16px">M</th>'+benches.map(b=>`<th colspan="3" class="vsep">${b}</th>`).join('')+'<th rowspan="2" class="vsep">GPU</th></tr><tr>'+
+    benches.map(()=>'<th class="vsep">TT</th><th>TS</th><th class="th">TH</th>').join('')+'</tr></thead><tbody>';
+  rows.forEach(r=>{h+=`<tr><td class="m">${r[0]}</td>`;
+    for(let b=1;b<=6;b++){const v=r[b],mx=Math.max(...v);
+      h+=v.map((x,i)=>`<td class="${i===0?'vsep ':''}${i===2?'th ':''}${x===mx?'best':''}">${x.toFixed(3)}</td>`).join('');}
+    h+=`<td class="vsep">${r[7].toFixed(2)}</td></tr>`;});
+  document.getElementById('cmpTable').innerHTML=h+'</tbody>';
+})();
+
+/* ---------- bibtex copy ---------- */
+document.getElementById('copyBtn').onclick=async e=>{
+  try{await navigator.clipboard.writeText(document.getElementById('bibText').textContent);e.target.textContent='Copied';}
+  catch(_){e.target.textContent='Select & copy';}
+  setTimeout(()=>e.target.textContent='Copy',1600);
+};
+
+/* ---------- reveal on scroll ---------- */
+const io=new IntersectionObserver(es=>es.forEach(x=>{if(x.isIntersecting){x.target.classList.add('in');io.unobserve(x.target);}}),{threshold:.12});
+document.querySelectorAll('.reveal').forEach(n=>io.observe(n));
+</script>
+</body>
+</html>
